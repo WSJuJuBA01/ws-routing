@@ -1,0 +1,50 @@
+
+name: Build WS Routing RU
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download geodata
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          BASE="https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download"
+          curl -fL --retry 3 "$BASE/geosite.dat" -o dist/geosite.dat
+          curl -fL --retry 3 "$BASE/geoip.dat" -o dist/geoip.dat
+          test -s dist/geosite.dat
+          test -s dist/geoip.dat
+          sha256sum dist/geosite.dat dist/geoip.dat > dist/SHA256SUMS
+
+      - name: Add custom lists
+        run: |
+          cp data/ru-domains.txt dist/ru-domains.txt
+          cp data/bittorrent-domains.txt dist/bittorrent-domains.txt
+
+      - name: Publish release branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cd dist
+          git init
+          git checkout -b release
+          git add .
+          git commit -m "Update geodata $(date -u +%Y-%m-%d)"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          git push --force origin release
