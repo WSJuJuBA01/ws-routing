@@ -1,4 +1,3 @@
-
 name: Build WS Routing RU
 
 on:
@@ -9,28 +8,145 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ws-routing-build
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Download geodata
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+
+      - name: Download source geodata
         shell: bash
         run: |
           set -euo pipefail
+
           mkdir -p dist
           BASE="https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download"
-          curl -fL --retry 3 "$BASE/geosite.dat" -o dist/geosite.dat
-          curl -fL --retry 3 "$BASE/geoip.dat" -o dist/geoip.dat
-          test -s dist/geosite.dat
-          test -s dist/geoip.dat
-          sha256sum dist/geosite.dat dist/geoip.dat > dist/SHA256SUMS
 
-      - name: Add custom lists
+          curl -fL --retry 3 "$BASE/geoip.dat" -o dist/geoip.dat
+
+          test -s dist/geoip.dat
+
+      - name: Prepare custom geosite categories
+        shell: bash
         run: |
+          set -euo pipefail
+
+          git clone --depth 1 \
+            https://github.com/v2fly/domain-list-community.git \
+            domain-list-community
+
+          cp -a domain-list-community/data custom-data
+
+          mkdir -p custom-data
+
+          # Российские домены
+          {
+            echo "include:ru"
+            echo "domain:yandex.ru"
+            echo "domain:yandex.net"
+            echo "domain:ya.ru"
+            echo "domain:vk.com"
+            echo "domain:vk.ru"
+            echo "domain:mail.ru"
+            echo "domain:gosuslugi.ru"
+            echo "domain:nalog.gov.ru"
+            echo "domain:mos.ru"
+            echo "domain:sberbank.ru"
+            echo "domain:vtb.ru"
+            echo "domain:alfabank.ru"
+            echo "domain:tbank.ru"
+            echo "domain:ozon.ru"
+            echo "domain:wildberries.ru"
+            echo "domain:avito.ru"
+            echo "domain:2gis.ru"
+            echo "domain:rutube.ru"
+            echo "domain:kinopoisk.ru"
+          } > custom-data/ws-ru
+
+          # Загружаем обновляемый список торрент-сайтов
+          curl -fL --retry 3 \
+            https://raw.githubusercontent.com/blocklistproject/Lists/master/torrent.txt \
+            -o /tmp/torrent-source.txt
+
+          # Преобразуем hosts-формат в доменные правила geosite.
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          source = Path("/tmp/torrent-source.txt")
+          domains = set()
+
+          for line in source.read_text(
+              encoding="utf-8", errors="ignore"
+          ).splitlines():
+              line = line.split("#", 1)[0].strip().lower()
+              if not line:
+                  continue
+
+              parts = line.split()
+              candidate = parts[-1].strip(".")
+
+              # Поддерживаем строки hosts и обычные домены.
+              if candidate in {"localhost", "local", "broadcasthost"}:
+                  continue
+              if candidate.startswith("0.0.0.0") or candidate.startswith("127."):
+                  continue
+              if re.fullmatch(
+                  r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))+\Z",
+                  candidate
+              ):
+                  domains.add(candidate)
+
+          if not domains:
+              raise SystemExit("Torrent domain list is empty")
+
+          output = Path("custom-data/category-bittorrent")
+          output.write_text(
+              "# WS Routing RU - BitTorrent domain category\n"
+              + "".join(f"domain:{d}\n" for d in sorted(domains)),
+              encoding="utf-8"
+          )
+
+          Path("dist/category-bittorrent.txt").write_text(
+              "".join(f"{d}\n" for d in sorted(domains)),
+              encoding="utf-8"
+          )
+
+          print(f"Torrent domains collected: {len(domains)}")
+          PY
+
           cp data/ru-domains.txt dist/ru-domains.txt
-          cp data/bittorrent-domains.txt dist/category-bittorrent.txt
+
+      - name: Build geosite database
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd domain-list-community
+
+          go mod download
+          go run . --datapath="$GITHUB_WORKSPACE/custom-data"
+
+          test -s dlc.dat
+          cp dlc.dat "$GITHUB_WORKSPACE/dist/geosite.dat"
+
+      - name: Create checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum geosite.dat geoip.dat category-bittorrent.txt ru-domains.txt > SHA256SUMS
 
       - name: Publish release branch
         env:
@@ -39,12 +155,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
           cd dist
           git init
           git checkout -b release
           git add .
-          git commit -m "Update geodata $(date -u +%Y-%m-%d)"
-          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          git commit -m "Update routing data $(date -u +%Y-%m-%d)"
+          git remote add origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
           git push --force origin release
