@@ -23,21 +23,19 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
+          go-version: "1.25.x"
 
-      - name: Download source geodata
+      - name: Download geoip
         shell: bash
         run: |
           set -euo pipefail
-
           mkdir -p dist
-          BASE="https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download"
-
-          curl -fL --retry 3 "$BASE/geoip.dat" -o dist/geoip.dat
-
+          curl -fL --retry 3 \
+            https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat \
+            -o dist/geoip.dat
           test -s dist/geoip.dat
 
-      - name: Prepare custom geosite categories
+      - name: Prepare geosite source
         shell: bash
         run: |
           set -euo pipefail
@@ -48,46 +46,51 @@ jobs:
 
           cp -a domain-list-community/data custom-data
 
-          mkdir -p custom-data
+          # Собственная категория российских доменов.
+          cat > custom-data/ws-ru <<'EOF'
+          domain:yandex.ru
+          domain:yandex.net
+          domain:ya.ru
+          domain:yastatic.net
+          domain:vk.com
+          domain:vk.ru
+          domain:userapi.com
+          domain:mail.ru
+          domain:ok.ru
+          domain:gosuslugi.ru
+          domain:nalog.gov.ru
+          domain:mos.ru
+          domain:sberbank.ru
+          domain:vtb.ru
+          domain:alfabank.ru
+          domain:tbank.ru
+          domain:ozon.ru
+          domain:wildberries.ru
+          domain:avito.ru
+          domain:2gis.ru
+          domain:rzd.ru
+          domain:rbc.ru
+          domain:ria.ru
+          domain:tass.ru
+          domain:lenta.ru
+          domain:dzen.ru
+          domain:rutube.ru
+          domain:ivi.ru
+          domain:kinopoisk.ru
+          EOF
 
-          # Российские домены
-          {
-            echo "include:ru"
-            echo "domain:yandex.ru"
-            echo "domain:yandex.net"
-            echo "domain:ya.ru"
-            echo "domain:vk.com"
-            echo "domain:vk.ru"
-            echo "domain:mail.ru"
-            echo "domain:gosuslugi.ru"
-            echo "domain:nalog.gov.ru"
-            echo "domain:mos.ru"
-            echo "domain:sberbank.ru"
-            echo "domain:vtb.ru"
-            echo "domain:alfabank.ru"
-            echo "domain:tbank.ru"
-            echo "domain:ozon.ru"
-            echo "domain:wildberries.ru"
-            echo "domain:avito.ru"
-            echo "domain:2gis.ru"
-            echo "domain:rutube.ru"
-            echo "domain:kinopoisk.ru"
-          } > custom-data/ws-ru
-
-          # Загружаем обновляемый список торрент-сайтов
+          # Загружаем актуальный список торрент-доменов.
           curl -fL --retry 3 \
             https://raw.githubusercontent.com/blocklistproject/Lists/master/torrent.txt \
             -o /tmp/torrent-source.txt
 
-          # Преобразуем hosts-формат в доменные правила geosite.
           python3 - <<'PY'
           import re
           from pathlib import Path
 
-          source = Path("/tmp/torrent-source.txt")
           domains = set()
 
-          for line in source.read_text(
+          for line in Path("/tmp/torrent-source.txt").read_text(
               encoding="utf-8", errors="ignore"
           ).splitlines():
               line = line.split("#", 1)[0].strip().lower()
@@ -95,26 +98,22 @@ jobs:
                   continue
 
               parts = line.split()
-              candidate = parts[-1].strip(".")
+              host = parts[-1].strip(".")
 
-              # Поддерживаем строки hosts и обычные домены.
-              if candidate in {"localhost", "local", "broadcasthost"}:
+              if host in {"localhost", "local", "broadcasthost"}:
                   continue
-              if candidate.startswith("0.0.0.0") or candidate.startswith("127."):
-                  continue
+
               if re.fullmatch(
-                  r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))+\Z",
-                  candidate
+                  r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))+",
+                  host
               ):
-                  domains.add(candidate)
+                  domains.add(host)
 
           if not domains:
-              raise SystemExit("Torrent domain list is empty")
+              raise SystemExit("ERROR: torrent domain list is empty")
 
-          output = Path("custom-data/category-bittorrent")
-          output.write_text(
-              "# WS Routing RU - BitTorrent domain category\n"
-              + "".join(f"domain:{d}\n" for d in sorted(domains)),
+          Path("custom-data/category-bittorrent").write_text(
+              "".join(f"domain:{d}\n" for d in sorted(domains)),
               encoding="utf-8"
           )
 
@@ -123,7 +122,7 @@ jobs:
               encoding="utf-8"
           )
 
-          print(f"Torrent domains collected: {len(domains)}")
+          print(f"Torrent domains: {len(domains)}")
           PY
 
           cp data/ru-domains.txt dist/ru-domains.txt
@@ -134,19 +133,22 @@ jobs:
           set -euo pipefail
 
           cd domain-list-community
-
-          go mod download
           go run . --datapath="$GITHUB_WORKSPACE/custom-data"
 
           test -s dlc.dat
           cp dlc.dat "$GITHUB_WORKSPACE/dist/geosite.dat"
 
-      - name: Create checksums
+      - name: Verify output
         shell: bash
         run: |
           set -euo pipefail
+          test -s dist/geosite.dat
+          test -s dist/geoip.dat
+          test -s dist/category-bittorrent.txt
+          test -s dist/ru-domains.txt
           cd dist
-          sha256sum geosite.dat geoip.dat category-bittorrent.txt ru-domains.txt > SHA256SUMS
+          sha256sum geosite.dat geoip.dat \
+            category-bittorrent.txt ru-domains.txt > SHA256SUMS
 
       - name: Publish release branch
         env:
