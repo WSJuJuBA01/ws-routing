@@ -30,7 +30,7 @@ jobs:
       - name: Add custom lists
         run: |
           cp data/ru-domains.txt dist/ru-domains.txt
-          cp data/bittorrent-domains.txt dist/bittorrent-domains.txt
+          cp data/bittorrent-domains.txt dist/category-bittorrent.txt
 
       - name: Publish release branch
         env:
