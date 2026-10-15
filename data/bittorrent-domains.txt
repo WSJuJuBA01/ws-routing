@@ -1,0 +1,7 @@
+
+# Домены торрент-сайтов для правила BLOCK
+rutracker.org
+rutor.info
+rutor.is
+kinozal.tv
+nnmclub.to
